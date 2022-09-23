@@ -13,18 +13,18 @@ DY = [1, 0, -1, 0]
 
 ACTION_NUM = 0
 COOD_NUM = 4
-OBS_SHAPE = (50, 100, 3)
+OBS_SHAPE = (64, 128, 3)
 
-PLAYER_SIZE = 5
-GOAL_SIZE = 5
+PLAYER_SIZE = 4
+GOAL_SIZE = 4
 COLOR_RED = (255, 0, 0)
 COLOR_GREEN = (0, 255, 0)
 COLOR_BLUE = (0, 0, 255)
 
 STEPS_LIMIT = 100
 
-MAP_GRID_H = 10
-MAP_GRID_W = 20
+MAP_GRID_H = 16
+MAP_GRID_W = 32
 
 # MAP_GRID_H = 10
 # MAP_GRID_W = 10
@@ -44,9 +44,9 @@ def overlap(obj1: Object, obj2: Object):
     bottom = max(obj1.lt.y, obj2.lt.y)
     left = max(obj1.lt.x, obj2.lt.x)
     right = min(obj1.rb.x, obj2.rb.x)
-    print(
-        f"check: left:{left}, right:{right}\n bottom:{bottom}, top:{top}")
-    print("NG" if (left < right) and (bottom < top) else "OK")
+    # print(
+    #     f"check: left:{left}, right:{right}\n bottom:{bottom}, top:{top}")
+    # print("NG" if (left < right) and (bottom < top) else "OK")
     return (left < right) and (bottom < top)
 
 
@@ -96,7 +96,8 @@ class PCGEnv(gym.Env):
     def __init__(self):
         self.action_space = Box(
             low=0.0, high=1.0, shape=(ACTION_NUM+COOD_NUM,))
-        self.observation_space = Box(low=0, high=1.0, shape=OBS_SHAPE,)
+        self.observation_space = Box(
+            low=0, high=255, shape=OBS_SHAPE, dtype=np.uint8)
         self.height = self.observation_space.shape[0]
         self.width = self.observation_space.shape[1]
 
@@ -117,6 +118,9 @@ class PCGEnv(gym.Env):
         self.blocks = []
         self.map = [['.'] * MAP_GRID_W
                     for i in range(MAP_GRID_H)]
+        self.steps = 0
+        self.dist_prev = INF
+        self.is_placed = False
 
         flag = np.random.random() < 0.5
         left_size = PLAYER_SIZE if flag else GOAL_SIZE
@@ -136,12 +140,13 @@ class PCGEnv(gym.Env):
         grid_player = self._cood_to_grid(self.player.pos)
         grid_goal = self._cood_to_grid(self.goal.pos)
 
-        print(*self.map, sep='\n')
-        print(grid_player.x, grid_player.y)
-        print(grid_goal.x, grid_goal.y)
+        # print(*self.map, sep='\n')
+        # print(grid_player.x, grid_player.y)
+        # print(grid_goal.x, grid_goal.y)
         self.map[grid_player.y][grid_player.x] = 's'
         self.map[grid_goal.y][grid_goal.x] = 'g'
         self.dist_prev = self.dijkstra()
+        self.dist_init = self.dist_prev
 
         self.blocks = []
         self._draw_all()
@@ -149,13 +154,15 @@ class PCGEnv(gym.Env):
         return self.observation
 
     def step(self, actions):
+        actions = (actions + 1.0)/2.0  # [-1,1] -> [0,1]
+        actions = np.clip(actions, 0.0, 1.0)
         x = int(actions[0]*self.width)
         y = int(actions[1]*self.height)
         w = int(actions[2]*self.width)
         h = int(actions[3]*self.height)
 
         new_block = Block(Vec2(x, y), Vec2(w, h))
-        print(f'x,y,w,h = {x},{y},{w},{h}')
+        # print(f'x,y,w,h = {x},{y},{w},{h}')
         if self._check_ok(new_block):
             self.is_placed = True
             grid_lt = self._cood_to_grid(new_block.lt)
@@ -172,18 +179,25 @@ class PCGEnv(gym.Env):
         done = False
         self.steps += 1
         if self.steps == STEPS_LIMIT or self.dist_prev == -1:
+            if self.dist_prev != -1:
+                reward += self.dist_prev-self.dist_init
             done = True
         return self.observation, reward, done, {}
 
+    def seed(self, seed):
+        np.random.seed(seed)
+
     def _draw_all(self):
         self.observation = np.full(
-            self.observation_space.shape, 0, dtype=np.float32)
+            self.observation_space.shape, 0, dtype=np.uint8)
         self.player.draw(self.observation)
         self.goal.draw(self.observation)
         for block in self.blocks:
             block.draw(self.observation)
 
     def _check_ok(self, obj: Object):
+        if (not (obj.lt.x < obj.rb.x and obj.lt.y < obj.rb.y)):
+            return False
         if overlap(obj, self.player) or self.overlap_grid(obj, self.player):
             return False
         if overlap(obj, self.goal) or self.overlap_grid(obj, self.goal):
@@ -207,13 +221,18 @@ class PCGEnv(gym.Env):
     def _reward(self):
         reward = 0
         dist = self.dijkstra()
-        print("Dist:", dist)
         if self.is_placed:
-            reward += 0.1
-        if dist == -1:
-            reward = -3.0
+            # last_block = self.blocks[-1]
+            # # area = (last_block.rb.x-last_block.lt.x) * \
+            # #     (last_block.rb.y-last_block.lt.y)
+            # reward += area/10000
+            reward += 1.0
         else:
-            reward += (self.dist_prev-dist)/10
+            reward -= 0.1
+        if dist == -1:
+            reward = -10.0
+        else:
+            reward += (dist-self.dist_prev)*2
         self.dist_prev = dist
         return reward
 
@@ -237,7 +256,8 @@ class PCGEnv(gym.Env):
         return dist[g.y][g.x]
 
     def render(self):
-        print(*self.map, sep='\n')
+        # print(*self.map, sep='\n')
+        pass
 
 
 def clamp(n, mini, maxi):
